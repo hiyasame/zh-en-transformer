@@ -1,0 +1,47 @@
+# Stage 2: 本地 Apple M2 Max (mps) 快速验证配置 (~5万句短句, 约 20~30 分钟)
+data:
+  dataset_name: "Helsinki-NLP/opus-100"
+  dataset_config: "en-zh"
+  max_train_samples: 60000
+  max_seq_len: 64
+  zh_vocab_size: 8000
+  en_vocab_size: 8000
+  processed_dir: "data/local_small"
+
+model:
+  d_model: 256
+  num_heads: 8
+  num_encoder_layers: 4
+  num_decoder_layers: 4
+  d_ff: 1024
+  dropout: 0.15
+  max_len: 256
+  pad_id: 0
+  bos_id: 2
+  eos_id: 3
+  tie_tgt_weights: true
+  norm_first: true
+  use_flash_attn: true      # 默认使用 PyTorch SDPA / FlashAttention 内核；设 false 则走纯手写注意力
+
+train:
+  device: "mps"             # 在 Colab 上会自动切到 cuda
+  use_bf16: true            # L4/A100 自动走 bf16，T4 自动走 fp16+GradScaler，MPS 自动忽略
+  use_compile: true         # 仅 L4/A100 自动启用，T4/MPS 自动忽略
+  max_tokens_per_batch: 8192
+  grad_accum_steps: 1       # 等效 ~8192 tokens/step，减少 CPU 派发开销
+  max_steps: 15000
+  warmup_steps: 2500
+  lr_factor: 0.8            # d_model=256 下峰值 lr = 1.0e-3，稳健防 Post-LN 注意力坍缩
+  adam_betas: [0.9, 0.98]
+  adam_eps: 1.0e-9
+  label_smoothing: 0.1
+  grad_clip: 1.0
+  eval_every: 1000
+  save_every: 2000
+  keep_last_n_checkpoints: 5
+  save_dir: "checkpoints/local_small"
+
+decode:
+  beam_size: 4
+  length_penalty_alpha: 0.6
+  max_extra_len: 50

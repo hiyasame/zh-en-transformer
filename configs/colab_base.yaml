@@ -1,0 +1,47 @@
+# Stage 3: Google Colab (L4 / A100) 论文 Transformer Base 标准配置 (~100万-200万句, 约 2~4 小时)
+data:
+  dataset_name: "Helsinki-NLP/opus-100"   # 或改用 "wmt/wmt19" ("zh-en", streaming=True)
+  dataset_config: "en-zh"
+  max_train_samples: 1000000
+  max_seq_len: 128
+  zh_vocab_size: 20000
+  en_vocab_size: 16000
+  processed_dir: "data/colab_base"
+
+model:
+  d_model: 512
+  num_heads: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  d_ff: 2048
+  dropout: 0.1
+  max_len: 512
+  pad_id: 0
+  bos_id: 2
+  eos_id: 3
+  tie_tgt_weights: true
+  norm_first: true
+  use_flash_attn: true      # 默认使用 PyTorch SDPA / FlashAttention 内核；设 false 则走纯手写注意力
+
+train:
+  device: "cuda"
+  use_bf16: true
+  use_compile: false         # train.py 会自动检测仅在 L4/A100 开启，T4 自动跳过防卡死
+  max_tokens_per_batch: 12288
+  grad_accum_steps: 2       # 等效 ~24576 tokens/step，T4 占 ~6.5GB/16GB 显存最稳最快
+  max_steps: 30000
+  warmup_steps: 4000
+  lr_factor: 2.0            # Pre-LN 稳定支持峰值 lr ~1.4e-3，大幅加速收敛
+  adam_betas: [0.9, 0.98]
+  adam_eps: 1.0e-9
+  label_smoothing: 0.1
+  grad_clip: 1.0
+  eval_every: 2000
+  save_every: 2000
+  keep_last_n_checkpoints: 5
+  save_dir: "/content/drive/MyDrive/translator_runs/colab_base"
+
+decode:
+  beam_size: 4
+  length_penalty_alpha: 0.6
+  max_extra_len: 50

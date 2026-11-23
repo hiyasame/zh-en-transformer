@@ -1,0 +1,75 @@
+# 原论文旗舰级复现配置: Pre-LN Transformer Big (~214M 参数, 450万多域句对 + 37,000 三方共享 BPE 词表)
+# 推荐算力: Modal 4x H100 (H100:4 DDP + 原生因果 FlashAttention-2 + 有效词紧凑投影 + Fused Adam)
+# 预计耗时: 数据准备约 6~10 分钟 (16核 CPU, ~$0.12) + 4xH100 训练约 38~48 分钟 (~$11~$13.5) + 单卡 L4 评测 (~$0.03)
+data:
+  max_train_samples: 4500000
+  max_seq_len: 128
+  shared_vocab: true          # 论文 §3.4: 中英联合训练单套 BPE 子词词表，英文技术词/专有名词零碎片对齐
+  vocab_size: 37000
+  processed_dir: "data/modal_wmt_45m"
+  sources:
+    # 1. 高质量政经与深度评论 (Project Syndicate 双语专栏)
+    - name: "Helsinki-NLP/news_commentary"
+      config: "en-zh"
+      max_samples: 80000
+      streaming: false
+    # 2. WMT19 官方大规模综合平行语料 (含新闻 CWMT、百科 WikiTitles、国际组织文献等，流式随机打乱采样)
+    - name: "wmt/wmt19"
+      config: "zh-en"
+      max_samples: 3800000
+      streaming: true
+    # 3. OPUS 多领域日常口语、字幕与技术文档语料，保证生活口语与现代词汇流畅度
+    - name: "Helsinki-NLP/opus-100"
+      config: "en-zh"
+      max_samples: 800000
+      streaming: false
+  eval_dataset:
+    name: "wmt/wmt19"
+    config: "zh-en"           # 官方人工高质量新闻测试集 (newstest2018)
+
+model:
+  d_model: 1024               # 论文 Table 3 Transformer (big): d_model=1024, H=16, d_ff=4096 (~214M 参数)
+  num_heads: 16
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  d_ff: 4096
+  dropout: 0.2
+  max_len: 512
+  pad_id: 0
+  bos_id: 2
+  eos_id: 3
+  tie_tgt_weights: true
+  tie_all_embeddings: true    # 论文 §3.4: src_embed == tgt_embed == output_proj 三方共享同一权重矩阵
+  norm_first: true            # Pre-LN + 栈顶 LayerNorm；设为 false 则切回手写 Post-LN
+  use_flash_attn: true        # 设为 false 则回退你手写的 scaled_dot_product_attention
+  use_flash_causal: true      # 设为 true 直接命中原生 FlashAttention-2 下三角因果内核；设 false 则显式传入 make_tgt_mask
+
+train:
+  device: "cuda"
+  use_bf16: true              # H100 原生硬件 bfloat16 Tensor Core 加速
+  use_compile: false          # 关闭 compile 避免多卡符号编译卡顿
+  unpad_loss: true            # 只对非 <pad> 真实词做 37K 大词表输出投影与交叉熵；设 false 则走全矩阵投影
+  fused_adam: true            # 开启 CUDA 单内核融合 Adam；设 false 则走标准多张量循环 Adam
+  bucket_pool_size: 32768     # 超大缓冲池精细分桶（原默认 2048），将同 Batch 句长差压缩到极致
+  pad_to_multiple: 1          # 非编译态取消 8 倍数强行补齐，消除短句 <pad> 空算浪费（设 8 可恢复原对齐行为）
+  dist_eval: true             # 4 张 H100 分片并行跑验证集 Greedy 解码；设 false 则仅单卡评测
+  eval_batch_size: 256
+  max_tokens_per_batch: 32768 # 90% 高填充率下 4 卡全局每步高达 ~10.5万真实目标词（相当于原论文单步 25K 的 4.2 倍！）
+  grad_accum_steps: 1
+  max_steps: 20000            # 20,000 步累计训练 ~21亿真实目标词（等效原论文 ~84,000 步！），仅需 ~38~48 分钟
+  warmup_steps: 3000
+  lr_factor: 1.8              # Pre-LN Big 下峰值学习率 ~1.03e-3
+  adam_betas: [0.9, 0.98]
+  adam_eps: 1.0e-9
+  label_smoothing: 0.1
+  grad_clip: 1.0
+  eval_every: 2500
+  save_every: 2500
+  keep_last_n_checkpoints: 5
+  save_dir: "checkpoints/modal_wmt_big"
+
+decode:
+  beam_size: 4
+  length_penalty_alpha: 0.6
+  max_extra_len: 50
+  fast_beam: true             # 启用批量化 Beam Search (提速 ~3.5x)；设 false 则调用你手写的 beam_search_decode

@@ -1,0 +1,53 @@
+# Modal A100 / H100 高性能 Pre-LN Transformer Base 标准配置
+# H100 预计耗时 ~25-35 分钟 (约 $2.0-$2.5 额度)，A100 预计耗时 ~45-60 分钟
+data:
+  dataset_name: "Helsinki-NLP/opus-100"   # 如需纯新闻风格可改为 "wmt/wmt19" 并将 dataset_config 设为 "zh-en"
+  dataset_config: "en-zh"
+  max_train_samples: 1000000
+  max_seq_len: 128
+  zh_vocab_size: 20000
+  en_vocab_size: 16000
+  processed_dir: "data/modal_base"
+
+model:
+  d_model: 512
+  num_heads: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  d_ff: 2048
+  dropout: 0.1
+  max_len: 512
+  pad_id: 0
+  bos_id: 2
+  eos_id: 3
+  tie_tgt_weights: true
+  norm_first: true          # 启用 Pre-LN + 栈顶 LayerNorm，大幅提升深层梯度流与收敛上限
+  use_flash_attn: true      # 默认使用 H100/A100 FlashAttention 融合内核；设 false 则走纯手写注意力
+  use_flash_causal: true    # 默认使用原生 FlashAttention-2 因果内核；设 false 则传入显式 make_tgt_mask
+
+train:
+  device: "cuda"
+  use_bf16: true            # A100 / H100 原生硬件 bfloat16 Tensor Core 加速
+  use_compile: false        # 关闭 compile，0 秒等待直接弹射起步！
+  unpad_loss: true          # 剔除 <pad> 位置的大词表投影与交叉熵冗余计算
+  fused_adam: true          # CUDA 单内核融合 Adam
+  bucket_pool_size: 16384
+  pad_to_multiple: 1
+  max_tokens_per_batch: 24576
+  grad_accum_steps: 1       # 80GB H100 / 40GB A100 一步到位 (~9GB 显存)，省去梯度累积调度开销
+  max_steps: 40000          # 总计训练约 9 亿有效词 (~45 轮)，充分压低实词与专有名词 Loss
+  warmup_steps: 4000
+  lr_factor: 2.0            # Pre-LN 下峰值学习率 ~1.40e-3 (比昨晚 Post-LN 翻倍，收敛更快更透)
+  adam_betas: [0.9, 0.98]
+  adam_eps: 1.0e-9
+  label_smoothing: 0.1
+  grad_clip: 1.0
+  eval_every: 2500
+  save_every: 2500
+  keep_last_n_checkpoints: 5
+  save_dir: "checkpoints/modal_base"
+
+decode:
+  beam_size: 4
+  length_penalty_alpha: 0.6
+  max_extra_len: 50

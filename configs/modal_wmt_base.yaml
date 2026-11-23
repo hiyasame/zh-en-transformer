@@ -1,0 +1,72 @@
+# 原论文标准规模 100% 满算力复现配置: Pre-LN Transformer Base (~63M 参数, 450万多域句对 + 37,000 三方共享词表)
+# 推荐算力: Modal 4x H100 (H100:4 DDP + 原生因果 FlashAttention-2 + 有效词紧凑投影 + Fused Adam)
+# 预计耗时: 复用 modal_wmt_45m 缓存；4xH100 训练 25,000 步约 25~32 分钟 (~$7~$9，累计 ~26亿真实目标词，100%+ 跑满原论文 Base 算力！)
+data:
+  max_train_samples: 4500000
+  max_seq_len: 128
+  shared_vocab: true
+  vocab_size: 37000
+  processed_dir: "data/modal_wmt_45m"   # 与 modal_wmt_big 完全共享云端预处理缓存，无需二次准备数据！
+  sources:
+    - name: "Helsinki-NLP/news_commentary"
+      config: "en-zh"
+      max_samples: 80000
+      streaming: false
+    - name: "wmt/wmt19"
+      config: "zh-en"
+      max_samples: 3800000
+      streaming: true
+    - name: "Helsinki-NLP/opus-100"
+      config: "en-zh"
+      max_samples: 800000
+      streaming: false
+  eval_dataset:
+    name: "wmt/wmt19"
+    config: "zh-en"
+
+model:
+  d_model: 512                # 论文 Table 3 Transformer (base): d_model=512, H=8, d_ff=2048 (~63M 参数)
+  num_heads: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  d_ff: 2048
+  dropout: 0.1
+  max_len: 512
+  pad_id: 0
+  bos_id: 2
+  eos_id: 3
+  tie_tgt_weights: true
+  tie_all_embeddings: true
+  norm_first: true
+  use_flash_attn: true
+  use_flash_causal: true
+
+train:
+  device: "cuda"
+  use_bf16: true
+  use_compile: false
+  unpad_loss: true
+  fused_adam: true
+  bucket_pool_size: 32768
+  pad_to_multiple: 1
+  dist_eval: true
+  eval_batch_size: 256
+  max_tokens_per_batch: 32768 # 4 卡全局每步 ~10.5万真实目标词（原论文单步 25K 的 4.2 倍）
+  grad_accum_steps: 1
+  max_steps: 25000            # 25,000 * 10.5万 ≈ 26.2亿目标词，超额完成原论文 Base 100,000 步总训练量！
+  warmup_steps: 3000
+  lr_factor: 2.0              # Pre-LN Base 峰值学习率 ~1.61e-3
+  adam_betas: [0.9, 0.98]
+  adam_eps: 1.0e-9
+  label_smoothing: 0.1
+  grad_clip: 1.0
+  eval_every: 2500
+  save_every: 2500
+  keep_last_n_checkpoints: 5
+  save_dir: "checkpoints/modal_wmt_base"
+
+decode:
+  beam_size: 4
+  length_penalty_alpha: 0.6
+  max_extra_len: 50
+  fast_beam: true
